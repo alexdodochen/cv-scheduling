@@ -6,56 +6,75 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 pip install pandas openpyxl
-python generate_schedule_202604.py
+python generate_schedule_YYYYMM.py
 ```
 
-Output is written to `排班.xlsx` (creates new sheet or overwrites existing one).
+Output is written to `排班.xlsx` (creates new sheet or overwrites existing one). Only `pandas` and `openpyxl` are required; ignore `requirements.txt` (it contains unrelated Flask/ortools/gunicorn deps).
 
-Note: `requirements.txt` lists Flask/ortools/gunicorn which are **not** used by the current script — only `pandas` and `openpyxl` are needed.
+**Primary workflow**: Use the `cv-scheduler` skill (`/cv-scheduler`) which guides the interactive scheduling flow (reading preferences, confirming stats, computing allocations). See `排班工作流程.txt` for the step-by-step user guide.
 
 ## Architecture
 
-This repo contains a **心臟內科值班排班系統** (Cardiology on-call scheduling system).
+**心臟內科值班排班系統** (Cardiology on-call scheduling system) for 2026 Apr-Jul.
 
 ### Key Files
 
-- **`generate_schedule_202604.py`** — Month-specific scheduling script. Each month gets its own script (copy and update `year`, `month`, `sheet_name`, `holidays`, `fixed`, `avoid`, and `baseline`).
-- **`排班.xlsx`** — Master Excel workbook; each month is a separate sheet (e.g. `202604`). Also contains the `值班總數統計` cumulative stats sheet.
-- **`值班總統計.xlsx`** — Separate cumulative stats workbook (may be legacy; the script writes to `排班.xlsx`).
+- **`generate_schedule_YYYYMM.py`** — Month-specific scheduling script. Each month gets its own copy with updated config.
+- **`排班.xlsx`** — Master Excel workbook (**gitignored**, local only). Contains:
+  - `YYYYMM` sheets — calendar-grid schedules (e.g. `202604`)
+  - `YYYYMM預班` sheets — doctor preference/avoidance data for that month
+  - `YYYYMM 班數統計` sheets — per-month stats breakdown
+  - `值班總數統計` sheet — cumulative stats across all months
 - **`cv-scheduler/SKILL.md`** — Canonical scheduling rules specification. **Read this before modifying any scheduling logic.**
+- **`排班工作流程.txt`** — Plain-text workflow guide for the interactive scheduling process.
 
-### Scheduling Logic (`generate_schedule_202604.py`)
+### Scheduling Logic
 
 The script uses **backtracking search** (`solve()`) with these constraints:
 
-- **Doctor pools**: CR (總醫師: 麒翔、見賢、常胤), VS (主治: 廖瑀、昭佑、朝允、則瑋), inter_mid (中級: 展瀚、建寬)
-- **Weekday assignments**: CR + 建寬 are candidates; **holidays**: CR only
-- **Fixed assignments** (`fixed` dict): Certain doctors are pinned to specific dates
-- **Avoid dates** (`avoid` dict): Per-doctor date exclusions
-- **No back-to-back**: No consecutive days for anyone except 展瀚
-- **Caps**: CR max 5 weekday + 2 holiday per month; 建寬 max 3 weekday total
-- **Balance**: Candidates sorted by cumulative count (weekday or holiday) to distribute evenly
+**Doctor pools**:
+- CR (總醫師): 麒翔、見賢、常胤
+- VS (主治): 廖瑀、昭佑、朝允、則瑋
+- 中級: 展瀚、建寬
+
+**Assignment rules**:
+- Weekdays: CR + 建寬 are candidates; Holidays: CR only
+- VS and 展瀚 go into `fixed` dict (pinned to specific dates)
+- `avoid` dict holds per-doctor date exclusions
+
+**Hard constraints**:
+- No back-to-back days for anyone **except 展瀚**
+- CR: fixed total of 15 weekday + 6 holiday per month (5+2 each)
+- 建寬: max 3 weekday/month (ceiling from SKILL.md; actual cap adjusted per month based on remaining slots)
+
+**Soft constraints** (from SKILL.md, not yet in script):
+- Avoid every-other-day (QOD) scheduling — e.g. if someone works Wednesday, try to avoid Monday and Friday
+
+**Balance**: Candidates sorted by cumulative count from `值班總數統計` to distribute evenly. When counts can't divide equally, the doctor with fewer cumulative shifts gets priority.
+
+### Statistical Class Definitions
+
+These affect balance tracking, not assignment eligibility:
+
+- **週五班**: Non-holiday Friday, OR the day before a long weekend (連假前一天)
+- **週六班**: Saturday, OR middle days of a long weekend (not the last day)
+- **週日班**: Sunday, OR the last day of a long weekend (連假最後一天)
+
+Long-weekend logic is **month-specific** and must be manually coded in `get_stat_type()` for each script.
+
+### Output
 
 After solving, the script:
-1. Writes a calendar-grid sheet to `排班.xlsx` (7 columns Mon–Sun, holiday cells highlighted yellow `FFEB9C`)
+1. Writes a calendar-grid sheet to `排班.xlsx` (Mon-Sun columns, holiday cells highlighted yellow `FFEB9C`)
 2. Computes per-doctor stats (平日/假日/週五/週六/週日 counts)
-3. Adds this month's stats to `baseline` values and writes to the `值班總數統計` sheet
-
-### Statistical Class Definitions (from SKILL.md)
-
-- **週五班**: Non-holiday Friday, OR the day before a long weekend
-- **週六班**: Saturday, OR middle days of a long weekend (not the last day)
-- **週日班**: Sunday, OR the last day of a long weekend
-
-Long-weekend logic must be manually coded per month (see `get_stat_type()` in the script).
+3. Adds this month's stats to `baseline` values and updates the `值班總數統計` sheet
 
 ### Creating a New Month's Script
 
-1. Copy `generate_schedule_202604.py` → `generate_schedule_YYYYMM.py`
+1. Copy the latest `generate_schedule_YYYYMM.py`
 2. Update: `year`, `month`, `sheet_name`
 3. Update `holidays` list (Taiwan public holidays for that month)
 4. Update `get_stat_type()` for any long-weekend special cases
-5. Update `fixed` and `avoid` dicts based on doctor preferences (collected interactively per SKILL.md §3)
-6. Update `baseline` dict with cumulative stats from `值班總數統計` sheet
-7. Adjust CR/建寬 caps if needed to fit month's total weekday/holiday count
-8. Follow the interactive requirement-gathering flow in **SKILL.md §3** before coding preferences
+5. Update `baseline` dict with current values from `值班總數統計` sheet
+6. Update `fixed` and `avoid` dicts — **follow the interactive flow in SKILL.md section 3**: read `YYYYMM預班` sheet, present to user for confirmation, ask about 展瀚's shifts, then compute VS allocation
+7. Adjust 建寬's cap based on remaining weekday slots after CR and 展瀚
