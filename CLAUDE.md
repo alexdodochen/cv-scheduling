@@ -44,13 +44,14 @@ The script uses **backtracking search** (`solve()`) with these constraints:
 
 **Hard constraints**:
 - No back-to-back days for anyone **except 展瀚**
+- **No QOD (every-other-day) for anyone except 展瀚** — if someone works day D, they cannot work D±2. Enforced in the candidate filter during backtracking.
 - CR: fixed total of 15 weekday + 6 holiday per month (5+2 each)
 - 建寬: max 3 weekday/month (ceiling from SKILL.md; actual cap adjusted per month based on remaining slots)
-
-**Soft constraints** (from SKILL.md, not yet in script):
-- Avoid every-other-day (QOD) scheduling — e.g. if someone works Wednesday, try to avoid Monday and Friday
+- **CR 週五班 hard cap**: compute per-CR target from cumulative 週五 counts (lowest cum → most Fridays) and enforce as hard cap during assignment
 
 **Balance**: Candidates sorted by cumulative count from `值班總數統計` to distribute evenly. When counts can't divide equally, the doctor with fewer cumulative shifts gets priority.
+
+**Quality metric**: Monthly stats sheet includes a `QOD次數` column — count of days D where the same doctor also works D+2. Ideal value is 0.
 
 ### Statistical Class Definitions
 
