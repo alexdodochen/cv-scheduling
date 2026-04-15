@@ -5,11 +5,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Running the Schedule Generator
 
 ```bash
-pip install pandas openpyxl
+pip install gspread google-auth
 python generate_schedule_YYYYMM.py
 ```
 
-Output is written to `排班.xlsx` (creates new sheet or overwrites existing one). Only `pandas` and `openpyxl` are required; ignore `requirements.txt` (it contains unrelated Flask/ortools/gunicorn deps).
+Output is written to a **Google Sheet** (sheet ID in `gsheet_io.py`) — the script creates/overwrites the month's calendar tab, the per-month stats tab, and updates the cumulative stats tab. Required packages: `gspread` + `google-auth`. Ignore `requirements.txt` (unrelated Flask/ortools/gunicorn deps).
+
+**Authentication**: credentials loaded from `.gsa.json` (gitignored, local) or `GOOGLE_SERVICE_ACCOUNT_JSON` env var. Service account email `admission-bot@sigma-sector-492215-d2.iam.gserviceaccount.com` needs Editor access to the target sheet. Reuses the same service account as `line_reminder_bot/admission_push.py`.
 
 **Primary workflow**: Use the `cv-scheduler` skill (`/cv-scheduler`) which guides the interactive scheduling flow (reading preferences, confirming stats, computing allocations). See `排班工作流程.txt` for the step-by-step user guide.
 
@@ -19,12 +21,16 @@ Output is written to `排班.xlsx` (creates new sheet or overwrites existing one
 
 ### Key Files
 
-- **`generate_schedule_YYYYMM.py`** — Month-specific scheduling script. Each month gets its own copy with updated config.
-- **`排班.xlsx`** — Master Excel workbook (**gitignored**, local only). Contains:
-  - `YYYYMM` sheets — calendar-grid schedules (e.g. `202604`)
-  - `YYYYMM預班` sheets — doctor preference/avoidance data for that month
-  - `YYYYMM 班數統計` sheets — per-month stats breakdown
-  - `值班總數統計` sheet — cumulative stats across all months
+- **`generate_schedule_YYYYMM.py`** — Month-specific scheduling script. Each month gets its own copy with updated config. Contains only the solver + config; all I/O is delegated.
+- **`gsheet_io.py`** — Google Sheets I/O helpers shared by every month script: `get_sheet()`, `write_calendar_sheet()`, `write_monthly_stats()`, `update_cumulative_stats()`. `SHEET_ID` constant at the top. This is the only file that talks to Google Sheets.
+- **Google Sheet** (ID `10ilVOmJrr8jjfnMMbtj60tAIIAe1YX3ZRU1RLgn6Elk`, titled `排班 GoogleSheet`) — source of truth. Tabs:
+  - `YYYYMM` — calendar-grid schedule with holiday cells in yellow (`FFEB9C`)
+  - `YYYYMM 班數統計` — per-month stats breakdown (written by the script)
+  - `值班總數統計` — cumulative stats across all months (updated by the script)
+  - `當月預班` — doctor preference/avoidance data the user fills in before each month (read manually via cv-scheduler interactive flow; not yet auto-read by the script)
+- **`排班.xlsx`** — **deprecated local backup** from before the Google Sheet migration. Gitignored. Do not read from or write to it.
+- **`migrate_to_gsheet.py`** — one-off migration script kept for reference / rollback.
+- **`.gsa.json`** — service account credential (gitignored).
 - **`cv-scheduler/SKILL.md`** — Canonical scheduling rules specification. **Read this before modifying any scheduling logic.**
 - **`排班工作流程.txt`** — Plain-text workflow guide for the interactive scheduling process.
 
@@ -66,9 +72,11 @@ Long-weekend logic is **month-specific** and must be manually coded in `get_stat
 ### Output
 
 After solving, the script:
-1. Writes a calendar-grid sheet to `排班.xlsx` (Mon-Sun columns, holiday cells highlighted yellow `FFEB9C`)
-2. Computes per-doctor stats (平日/假日/週五/週六/週日 counts)
-3. Adds this month's stats to `baseline` values and updates the `值班總數統計` sheet
+1. Writes a calendar-grid tab to the Google Sheet via `write_calendar_sheet()` (Mon-Sun columns, holiday cells highlighted yellow `FFEB9C`)
+2. Computes per-doctor stats (平日/假日/週五/週六/週日 counts) and writes the `YYYYMM 班數統計` tab via `write_monthly_stats()`
+3. Adds this month's stats to `baseline` values and overwrites the `值班總數統計` tab via `update_cumulative_stats()`
+
+**Re-running a script is destructive to `值班總數統計`** — the hardcoded `baseline` is a snapshot of cumulative stats *before this month was counted*, so a second run with a stale baseline will corrupt cumulative totals. Update `baseline` from the current `值班總數統計` tab before re-running.
 
 ### Creating a New Month's Script
 
@@ -76,6 +84,6 @@ After solving, the script:
 2. Update: `year`, `month`, `sheet_name`
 3. Update `holidays` list (Taiwan public holidays for that month)
 4. Update `get_stat_type()` for any long-weekend special cases
-5. Update `baseline` dict with current values from `值班總數統計` sheet
-6. Update `fixed` and `avoid` dicts — **follow the interactive flow in SKILL.md section 3**: read `YYYYMM預班` sheet, present to user for confirmation, ask about 展瀚's shifts, then compute VS allocation
+5. Update `baseline` dict with current values from the `值班總數統計` tab in the Google Sheet
+6. Update `fixed` and `avoid` dicts — **follow the interactive flow in SKILL.md section 3**: read the `當月預班` tab, present to user for confirmation, ask about 展瀚's shifts, then compute VS allocation
 7. Adjust 建寬's cap based on remaining weekday slots after CR and 展瀚

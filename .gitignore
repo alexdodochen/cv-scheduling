@@ -1,3 +1,7 @@
+# Credentials & secrets
+*.json
+.gsa.json
+
 # Data files
 *.xlsx
 
