@@ -1,13 +1,16 @@
-import pandas as pd
 from datetime import date, timedelta
 import calendar
-from openpyxl import Workbook, load_workbook
-from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
+from gsheet_io import (
+    get_sheet,
+    write_calendar_sheet,
+    write_monthly_stats,
+    update_cumulative_stats,
+    DEFAULT_MONTHLY_HEADERS,
+)
 
 # --- Configuration ---
 year, month = 2026, 5
 sheet_name = "202605"
-excel_file = '排班.xlsx'
 
 # Doctors
 crs = ["麒翔", "見賢", "常胤"]
@@ -194,49 +197,17 @@ result = solve()
 if result is None:
     raise SystemExit("No feasible schedule found.")
 
-# --- Export & Formatting ---
-wb = load_workbook(excel_file)
-
-if sheet_name in wb.sheetnames: del wb[sheet_name]
-ws = wb.create_sheet(sheet_name)
-
-fill_holiday = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
-thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
-
-# Header
-days_header = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-for col, day in enumerate(days_header, 1):
-    cell = ws.cell(row=1, column=col, value=day)
-    cell.font = Font(bold=True)
-    cell.alignment = Alignment(horizontal='center')
-    cell.border = thin_border
-
-# Calendar Filling
-month_cal = calendar.monthcalendar(year, month)
-for r_idx, week in enumerate(month_cal):
-    for c_idx, day in enumerate(week, 1):
-        if day == 0: continue
-        d_obj = date(year, month, day)
-        cell_d = ws.cell(row=r_idx * 2 + 2, column=c_idx, value=day)
-        cell_n = ws.cell(row=r_idx * 2 + 3, column=c_idx, value=result.get(d_obj, ""))
-        cell_d.border = cell_n.border = thin_border
-        cell_n.font = Font(bold=True)
-        cell_n.alignment = Alignment(horizontal='center', vertical='center')
-        if is_holiday(d_obj):
-            cell_d.fill = cell_n.fill = fill_holiday
-
-for i in range(1, 8): ws.column_dimensions[chr(64 + i)].width = 18
-
-# Stats
+# --- Stats ---
 def qod_count(dates_set):
     # Count days D in set where D+2 is also in set (except for 展瀚, exempt from back-to-back/QOD)
     return sum(1 for d in dates_set if (d + timedelta(days=2)) in dates_set)
 
-stats = []
+stats_rows = []
+monthly_stats_map = {}
 for name in crs + vs_list + inter_mid:
     personal = [d for d, n in result.items() if n == name]
     personal_set = set(personal)
-    stats.append({
+    row = {
         "姓名": name,
         "平日班": len([d for d in personal if not is_holiday(d)]),
         "假日班": len([d for d in personal if is_holiday(d)]),
@@ -244,21 +215,11 @@ for name in crs + vs_list + inter_mid:
         "週六班": len([d for d in personal if get_stat_type(d) == "週六班"]),
         "週日班": len([d for d in personal if get_stat_type(d) == "週日班"]),
         "QOD次數": qod_count(personal_set),
-    })
-df_stats = pd.DataFrame(stats)
+    }
+    stats_rows.append(row)
+    monthly_stats_map[name] = row
 
-# Write per-month stats sheet
-month_stat_sheet = f"{sheet_name} 班數統計"
-if month_stat_sheet in wb.sheetnames: del wb[month_stat_sheet]
-ws_month = wb.create_sheet(month_stat_sheet)
-headers = ["姓名", "平日班", "假日班", "週五班", "週六班", "週日班", "QOD次數"]
-for c, h in enumerate(headers, 1):
-    ws_month.cell(1, c, h).font = Font(bold=True)
-for r, row in enumerate(stats, 2):
-    for c, h in enumerate(headers, 1):
-        ws_month.cell(r, c, row[h])
-
-# Update 值班總數統計 (baseline from April results already in sheet)
+# Baseline: cumulative stats BEFORE May was counted (i.e. after April run)
 baseline = {
     "見賢":  {"平日": 36, "週五": 10, "週六": 5,  "週日": 11, "假日": 17},
     "麒翔":  {"平日": 39, "週五": 9,  "週六": 8,  "週日": 8,  "假日": 18},
@@ -271,28 +232,30 @@ baseline = {
     "建寬":  {"平日": 17, "週五": 0,  "週六": 0,  "週日": 0,  "假日": 0},
 }
 
-if "值班總數統計" in wb.sheetnames:
-    ws_total = wb["值班總數統計"]
-    header_map = {ws_total.cell(1, c).value: c for c in range(1, ws_total.max_column + 1)}
-    for name, base in baseline.items():
-        s_row_list = df_stats[df_stats["姓名"] == name]
-        if s_row_list.empty: continue
-        s_row = s_row_list.iloc[0]
-        for r in range(2, ws_total.max_row + 1):
-            if ws_total.cell(r, header_map["姓名"]).value == name:
-                ws_total.cell(r, header_map["平日班"], value=base["平日"] + s_row["平日班"])
-                ws_total.cell(r, header_map["周五班"], value=base["週五"] + s_row["週五班"])
-                ws_total.cell(r, header_map["周六班"], value=base["週六"] + s_row["週六班"])
-                ws_total.cell(r, header_map["周日班"], value=base["週日"] + s_row["週日班"])
-                ws_total.cell(r, header_map["假日班 (含六日及國定假日)"], value=base["假日"] + s_row["假日班"])
-                break
+# --- Write to Google Sheet ---
+sheet = get_sheet()
+print(f'Opened: {sheet.title}')
 
-wb.save(excel_file)
+write_calendar_sheet(sheet, sheet_name, year, month, result, is_holiday)
+print(f'Wrote {sheet_name}')
+
+write_monthly_stats(
+    sheet,
+    f'{sheet_name} 班數統計',
+    stats_rows,
+    headers=DEFAULT_MONTHLY_HEADERS + ['QOD次數'],
+)
+print(f'Wrote {sheet_name} 班數統計')
+
+update_cumulative_stats(sheet, baseline, monthly_stats_map)
+print('Updated 值班總數統計')
 
 # Print schedule summary
-print(f"=== {sheet_name} Schedule ===")
+print(f"\n=== {sheet_name} Schedule ===")
 for d in sorted(result.keys()):
     tag = "H" if is_holiday(d) else " "
     print(f"{d.strftime('%m/%d')} ({'一二三四五六日'[d.weekday()]}) {tag} {result[d]}")
 print()
-print(df_stats.to_string(index=False))
+print(f"{'姓名':<6}{'平日班':>6}{'假日班':>6}{'週五班':>6}{'週六班':>6}{'週日班':>6}{'QOD次數':>8}")
+for row in stats_rows:
+    print(f"{row['姓名']:<6}{row['平日班']:>6}{row['假日班']:>6}{row['週五班']:>6}{row['週六班']:>6}{row['週日班']:>6}{row['QOD次數']:>8}")

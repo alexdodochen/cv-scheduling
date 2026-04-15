@@ -100,13 +100,20 @@ def write_calendar_sheet(sheet, sheet_name, year, month, result, is_holiday_fn):
     sheet.batch_update({'requests': requests})
 
 
-def write_monthly_stats(sheet, sheet_name, stats_rows):
+DEFAULT_MONTHLY_HEADERS = ['姓名', '平日班', '假日班', '週五班', '週六班', '週日班']
+
+
+def write_monthly_stats(sheet, sheet_name, stats_rows, headers=None):
     """Write the per-month 班數統計 tab.
 
-    stats_rows: list of dicts with keys 姓名, 平日班, 假日班, 週五班, 週六班, 週日班
+    stats_rows: list of dicts. Each row must contain every key in ``headers``.
+    headers: optional column order; defaults to DEFAULT_MONTHLY_HEADERS. Pass
+    DEFAULT_MONTHLY_HEADERS + ['QOD次數'] (or equivalent) to include quality
+    metrics — SKILL.md requires QOD次數 for 2026-05 onward.
     """
-    headers = ['姓名', '平日班', '假日班', '週五班', '週六班', '週日班']
-    grid = [headers]
+    if headers is None:
+        headers = DEFAULT_MONTHLY_HEADERS
+    grid = [list(headers)]
     for r in stats_rows:
         grid.append([r[h] for h in headers])
     ws = _ensure_worksheet(sheet, sheet_name, rows=len(grid), cols=len(headers))
