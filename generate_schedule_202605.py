@@ -2,6 +2,7 @@ from datetime import date, timedelta
 import calendar
 from gsheet_io import (
     get_sheet,
+    load_cumulative_stats,
     write_calendar_sheet,
     write_monthly_stats,
     update_cumulative_stats,
@@ -76,8 +77,12 @@ avoid = {
     "常胤": [date(2026, 5, 2), date(2026, 5, 3), date(2026, 5, 16), date(2026, 5, 17)],
 }
 
-# CR cumulative Friday counts (from 值班總數統計) — used for 週五班平衡
-cr_fri_cum = {"麒翔": 9, "見賢": 10, "常胤": 11}
+# Baseline loaded dynamically from 值班總數統計 — represents pre-this-month totals
+sheet = get_sheet()
+baseline = load_cumulative_stats(sheet)
+
+# CR cumulative Friday counts — used for 週五班平衡
+cr_fri_cum = {n: baseline[n]["週五"] for n in crs}
 
 # Number of 週五班 days this month (non-holiday Fridays in May)
 # Compute target per CR: lowest cumulative gets more
@@ -209,7 +214,7 @@ for name in crs + vs_list + inter_mid:
     personal_set = set(personal)
     row = {
         "姓名": name,
-        "平日班": len([d for d in personal if not is_holiday(d)]),
+        "平日班": len([d for d in personal if get_stat_type(d) == "平日"]),
         "假日班": len([d for d in personal if is_holiday(d)]),
         "週五班": len([d for d in personal if get_stat_type(d) == "週五班"]),
         "週六班": len([d for d in personal if get_stat_type(d) == "週六班"]),
@@ -219,21 +224,7 @@ for name in crs + vs_list + inter_mid:
     stats_rows.append(row)
     monthly_stats_map[name] = row
 
-# Baseline: cumulative stats BEFORE May was counted (i.e. after April run)
-baseline = {
-    "見賢":  {"平日": 36, "週五": 10, "週六": 5,  "週日": 11, "假日": 17},
-    "麒翔":  {"平日": 39, "週五": 9,  "週六": 8,  "週日": 8,  "假日": 18},
-    "常胤":  {"平日": 36, "週五": 11, "週六": 7,  "週日": 10, "假日": 19},
-    "廖瑀":  {"平日": 0,  "週五": 3,  "週六": 9,  "週日": 0,  "假日": 9},
-    "則瑋":  {"平日": 4,  "週五": 1,  "週六": 1,  "週日": 4,  "假日": 6},
-    "昭佑":  {"平日": 0,  "週五": 1,  "週六": 3,  "週日": 4,  "假日": 7},
-    "朝允":  {"平日": 0,  "週五": 2,  "週六": 7,  "週日": 1,  "假日": 9},
-    "展瀚":  {"平日": 17, "週五": 0,  "週六": 0,  "週日": 0,  "假日": 0},
-    "建寬":  {"平日": 17, "週五": 0,  "週六": 0,  "週日": 0,  "假日": 0},
-}
-
 # --- Write to Google Sheet ---
-sheet = get_sheet()
 print(f'Opened: {sheet.title}')
 
 write_calendar_sheet(sheet, sheet_name, year, month, result, is_holiday)

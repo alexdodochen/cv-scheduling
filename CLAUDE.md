@@ -13,7 +13,9 @@ Output is written to a **Google Sheet** (sheet ID in `gsheet_io.py`) — the scr
 
 **Authentication**: credentials loaded from `.gsa.json` (gitignored, local) or `GOOGLE_SERVICE_ACCOUNT_JSON` env var. Service account email `admission-bot@sigma-sector-492215-d2.iam.gserviceaccount.com` needs Editor access to the target sheet. Reuses the same service account as `line_reminder_bot/admission_push.py`.
 
-**Primary workflow**: Use the `cv-scheduler` skill (`/cv-scheduler`) which guides the interactive scheduling flow (reading preferences, confirming stats, computing allocations). See `排班工作流程.txt` for the step-by-step user guide.
+**Primary workflow**: Use the `cv-scheduler` skill (`/cv-scheduler`, definition at `cv-scheduler/SKILL.md`) which guides the interactive scheduling flow (reading preferences, confirming stats, computing allocations). See `排班工作流程.txt` for the step-by-step user guide.
+
+**Latest month script**: `generate_schedule_202605.py` — copy this when creating a new month, not older versions.
 
 ## Architecture
 
@@ -28,7 +30,8 @@ Output is written to a **Google Sheet** (sheet ID in `gsheet_io.py`) — the scr
   - `YYYYMM 班數統計` — per-month stats breakdown (written by the script)
   - `值班總數統計` — cumulative stats across all months (updated by the script)
   - `當月預班` — doctor preference/avoidance data the user fills in before each month (read manually via cv-scheduler interactive flow; not yet auto-read by the script)
-- **`排班.xlsx`** — **deprecated local backup** from before the Google Sheet migration. Gitignored. Do not read from or write to it.
+- **`排班.xlsx`**, **`值班總統計.xlsx`** — **deprecated local backups** from before the Google Sheet migration. Gitignored. Do not read from or write to them.
+- **`CV班表 見賢202508-202603.xlsx`** — historical reference only (prior year's actual schedule); not consumed by any script.
 - **`migrate_to_gsheet.py`** — one-off migration script kept for reference / rollback.
 - **`.gsa.json`** — service account credential (gitignored).
 - **`cv-scheduler/SKILL.md`** — Canonical scheduling rules specification. **Read this before modifying any scheduling logic.**
@@ -76,7 +79,9 @@ After solving, the script:
 2. Computes per-doctor stats (平日/假日/週五/週六/週日 counts) and writes the `YYYYMM 班數統計` tab via `write_monthly_stats()`
 3. Adds this month's stats to `baseline` values and overwrites the `值班總數統計` tab via `update_cumulative_stats()`
 
-**Re-running a script is destructive to `值班總數統計`** — the hardcoded `baseline` is a snapshot of cumulative stats *before this month was counted*, so a second run with a stale baseline will corrupt cumulative totals. Update `baseline` from the current `值班總數統計` tab before re-running.
+**Baseline loading**: `generate_schedule_202605.py` onwards reads the baseline dynamically via `load_cumulative_stats(sheet)` — no hardcoded `baseline` dict. The sheet value is treated as the "pre-this-month" cumulative, so **do not re-run a month after it has been applied** (that would double-count this month into its own baseline). Earlier scripts like `generate_schedule_202604.py` still carry a hardcoded `baseline` — copy from 202605 when making new months.
+
+**平日 definition**: 平日班 means Mon–Thu *non-holiday* (not Mon–Fri). Friday is tracked only as 週五班. The `值班總數統計` header `平日班(一至四)` makes this explicit.
 
 ### Creating a New Month's Script
 

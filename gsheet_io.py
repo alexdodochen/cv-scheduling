@@ -120,44 +120,94 @@ def write_monthly_stats(sheet, sheet_name, stats_rows, headers=None):
     ws.update(range_name='A1', values=grid, value_input_option='USER_ENTERED')
 
 
+def _find_cum_cols(header):
+    """Locate the standard columns in a 值班總數統計-style header.
+
+    Accepts both 平日班 / 平日班(一至四) and 週/周 variants so the sheet can
+    be relabeled without breaking readers.
+    """
+    def find(*predicates):
+        for pred in predicates:
+            for i, h in enumerate(header):
+                if pred(h):
+                    return i
+        raise RuntimeError(f'Unexpected {CUMULATIVE_TAB} header: {header}')
+
+    return {
+        'name': find(lambda h: h == '姓名'),
+        'weekday': find(lambda h: h.startswith('平日班')),
+        'fri': find(lambda h: h in ('週五班', '周五班')),
+        'sat': find(lambda h: h in ('週六班', '周六班')),
+        'sun': find(lambda h: h in ('週日班', '周日班')),
+        'holiday': find(lambda h: h.startswith('假日班')),
+    }
+
+
+def load_cumulative_stats(sheet):
+    """Read 值班總數統計 into a baseline dict usable by the schedulers.
+
+    Returns: {name: {'平日': n, '週五': n, '週六': n, '週日': n, '假日': n}}
+
+    Represents cumulative totals as currently written on the sheet — treat
+    as the "pre-this-month" baseline when running a brand-new month.
+    """
+    ws = sheet.worksheet(CUMULATIVE_TAB)
+    all_values = ws.get_all_values()
+    if not all_values:
+        return {}
+    header = all_values[0]
+    cols = _find_cum_cols(header)
+
+    def as_int(row, idx):
+        if idx >= len(row):
+            return 0
+        v = row[idx].strip() if isinstance(row[idx], str) else row[idx]
+        return int(v) if v not in (None, '') else 0
+
+    result = {}
+    for row in all_values[1:]:
+        if not row or not row[cols['name']]:
+            continue
+        result[row[cols['name']]] = {
+            '平日': as_int(row, cols['weekday']),
+            '週五': as_int(row, cols['fri']),
+            '週六': as_int(row, cols['sat']),
+            '週日': as_int(row, cols['sun']),
+            '假日': as_int(row, cols['holiday']),
+        }
+    return result
+
+
 def update_cumulative_stats(sheet, baseline, monthly_stats):
     """Overwrite 值班總數統計 with baseline + monthly_stats.
 
     baseline: {name: {'平日': n, '週五': n, '週六': n, '週日': n, '假日': n}}
     monthly_stats: {name: {'平日班': n, '週五班': n, '週六班': n, '週日班': n, '假日班': n}}
 
-    Header format on the sheet:
-        姓名 | 平日班 | 周五班 | 周六班 | 周日班 | 假日班 (含六日及國定假日)
+    平日 / 平日班 uses the Mon-Thu (non-holiday) definition. 週五 is tracked
+    separately.
     """
     ws = sheet.worksheet(CUMULATIVE_TAB)
     all_values = ws.get_all_values()
     if not all_values:
         return
-    header = all_values[0]
-    try:
-        col_name = header.index('姓名')
-        col_weekday = header.index('平日班')
-        col_fri = header.index('周五班')
-        col_sat = header.index('周六班')
-        col_sun = header.index('周日班')
-        col_holiday = next(i for i, h in enumerate(header) if h.startswith('假日班'))
-    except (ValueError, StopIteration) as e:
-        raise RuntimeError(f'Unexpected {CUMULATIVE_TAB} header: {header}') from e
+    cols = _find_cum_cols(all_values[0])
+    header_len = len(all_values[0])
 
     updated_rows = []
     for row in all_values[1:]:
-        name = row[col_name]
+        name = row[cols['name']]
         base = baseline.get(name)
         month = monthly_stats.get(name, {'平日班': 0, '週五班': 0, '週六班': 0, '週日班': 0, '假日班': 0})
         if base is None:
             updated_rows.append(row)
             continue
-        new_row = list(row) + [''] * (len(header) - len(row))
-        new_row[col_weekday] = base['平日'] + month['平日班']
-        new_row[col_fri] = base['週五'] + month['週五班']
-        new_row[col_sat] = base['週六'] + month['週六班']
-        new_row[col_sun] = base['週日'] + month['週日班']
-        new_row[col_holiday] = base['假日'] + month['假日班']
+        new_row = list(row) + [''] * (header_len - len(row))
+        new_row[cols['weekday']] = base['平日'] + month['平日班']
+        new_row[cols['fri']] = base['週五'] + month['週五班']
+        new_row[cols['sat']] = base['週六'] + month['週六班']
+        new_row[cols['sun']] = base['週日'] + month['週日班']
+        new_row[cols['holiday']] = base['假日'] + month['假日班']
         updated_rows.append(new_row)
 
     ws.update(range_name='A2', values=updated_rows, value_input_option='USER_ENTERED')
